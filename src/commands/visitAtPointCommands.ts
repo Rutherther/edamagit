@@ -1,4 +1,4 @@
-import { window, workspace, TextEditorRevealType, Range, Position, Selection, commands } from 'vscode';
+import { window, workspace, TextEditorRevealType, Range, Position, Selection, commands, WorkspaceEdit, Uri } from 'vscode';
 import { MagitRepository } from '../models/magitRepository';
 import { CommitItemView } from '../views/commits/commitSectionView';
 import { DocumentView } from '../views/general/documentView';
@@ -22,6 +22,7 @@ import { sep } from 'path';
 import { ErrorMessageView } from '../views/errorMessageView';
 import { processView } from './processCommands';
 import { stashToMagitChanges } from './diffingCommands';
+import { ContextualMagitChange } from '../models/magitChange';
 
 export async function magitVisitAtPoint(repository: MagitRepository, currentView: DocumentView) {
 
@@ -37,8 +38,27 @@ export async function magitVisitAtPoint(repository: MagitRepository, currentView
 
     const change = (selectedView as ChangeView).change;
 
-    if (change.hunks?.length) {
-      return visitHunk(selectedView.subViews.find(v => v instanceof HunkView) as HunkView);
+    /* Check if is ContextualMagitChange */ 
+    if ((change as ContextualMagitChange).contextId !== undefined) {
+      const contextual = change as ContextualMagitChange;
+      const content = await gitRun(repository.gitRepository, ['show', `${contextual.contextId}:${change.relativePath}`]);
+
+      let path = change.uri.fsPath;
+      let filename = path.split('/').pop() ?? '';
+      let extension = filename.split('.', 2).pop() ?? '';
+      if (extension.length > 0) {
+        path = path.slice(0, -extension.length - 1);
+      }
+
+      workspace.openTextDocument(Uri.parse(`untitled:${path}.~${contextual.contextId}~.${extension}`))
+        .then(doc => window.showTextDocument(doc))
+        .then(editor => {
+          editor.edit((edit) => {
+            edit.insert(new Position(0, 0), content.stdout);
+          });
+        });
+    } else if (change.hunks?.length) {
+        return visitHunk(selectedView.subViews.find(v => v instanceof HunkView) as HunkView);
     } else {
 
       // Check if change path is a directory. Reveal directories in file explorer
@@ -148,5 +168,5 @@ export async function visitCommit(repository: MagitRepository, commitHash: strin
   const commit: MagitCommit = { hash: commitHash, message: '', parents: [] };
 
   const uri = CommitDetailView.encodeLocation(repository, commit.hash);
-  return ViewUtils.showView(uri, new CommitDetailView(uri, commit, header.stdout, stashToMagitChanges(nameStatus.stdout, diffs.stdout)));
+  return ViewUtils.showView(uri, new CommitDetailView(uri, commit, header.stdout, stashToMagitChanges(repository, commitHash, nameStatus.stdout, diffs.stdout)));
 }
